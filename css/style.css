@@ -36,50 +36,20 @@ body {
   position: relative;
 }
 
-/* Верхняя строка с именем и заголовком */
-.main-header {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 20px;
-  min-height: 60px;
-  /* чтобы имя и заголовок не наползали друг на друга */
-}
-
-.user-name {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  color: #333;
-  font-size: 1.2rem;
-  font-weight: bold;
-  padding: 5px 15px 5px 0;
-  border-radius: 5px;
-  transition: background 0.2s;
-  cursor: pointer;
-  white-space: nowrap;
-  z-index: 1;
-}
-
-.user-name:hover {
-  background: #f0f0f0;
-}
-
 .main__heading {
   color: #800020;
   font-size: 2.2rem;
   text-align: center;
   border-bottom: 2px solid #800020;
   padding-bottom: 10px;
-  margin: 0;
+  margin-bottom: 20px;
 }
 
 .feed__label {
   font-size: 1.4rem;
   margin-bottom: 15px;
   color: #333;
+  text-align: center;
 }
 
 .feed__card {
@@ -293,45 +263,9 @@ body {
   border: 1px solid #ccc;
 }
 
-/* Принудительное выравнивание имени пользователя (переопределение) */
-.user-name {
-  position: absolute !important;
-  left: 0 !important;
-  top: 50% !important;
-  transform: translateY(-50%) !important;
-  margin-left: 0 !important;
-  padding-left: 0 !important;
-  display: block !important;
-}
-
-.main-header {
-  position: relative !important;
-  display: flex !important;
-  justify-content: center !important;
-  align-items: center !important;
-}
-
-/* Полноэкранный режим для страниц */
 #pageContainer {
   display: none;
-  /* скрыт по умолчанию, показывается при открытии страниц */
   min-height: 70vh;
   width: 100%;
   padding: 10px 0;
-}
-
-.like-icon,
-.like-btn {
-  font-size: 1.2rem !important;
-  line-height: 1 !important;
-}
-
-.like-icon,
-.like-btn {
-  font-family: "Segoe UI", Arial, sans-serif !important;
-  font-variant-emoji: text !important;
-}
-
-#showStatisticsLink {
-  display: none !important;
 }

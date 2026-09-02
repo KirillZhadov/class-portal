@@ -1,17 +1,366 @@
 import { auth, db } from './firebase-config.js';
-import { 
-  signInWithEmailAndPassword, 
+import {
+  signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   onAuthStateChanged,
-  signOut 
+  signOut
 } from 'https://www.gstatic.com/firebasejs/10.14.0/firebase-auth.js';
 import {
   collection, addDoc, getDocs, query, where, limit,
   updateDoc, deleteDoc, doc, getDoc, serverTimestamp,
-  deleteField
+  deleteField, increment
 } from 'https://www.gstatic.com/firebasejs/10.14.0/firebase-firestore.js';
 
-// ---- Элементы DOM ----
+// ============================================================
+// 1. КОНФИГУРАЦИЯ КАТЕГОРИЙ (ИЕРАРХИЧЕСКАЯ СТРУКТУРА)
+// ============================================================
+const CATEGORIES_CONFIG = {
+  "спорт": {
+    sub: {
+      "гто": {
+        sub: {
+          "золото": null,
+          "серебро": null,
+          "бронза": null,
+          "участник": null
+        }
+      },
+      "соревнования": {
+        sub: {
+          "вид спорта": {
+            inputType: 'text',
+            placeholder: 'Введите вид спорта (футбол, баскетбол...)',
+            sub: {
+              "золото": null,
+              "серебро": null,
+              "бронза": null,
+              "участник": null
+            }
+          }
+        }
+      },
+      "личные достижения": {
+        sub: {
+          "вид спорта": {
+            inputType: 'text',
+            placeholder: 'Введите вид спорта (футбол, баскетбол...)'
+          }
+        }
+      }
+    }
+  },
+  "проект": {
+    sub: {
+      "шаг в будущее": {
+        sub: {
+          "предмет": {
+            inputType: 'text',
+            placeholder: 'Введите предмет (физика, химия...)',
+            sub: {
+              "1 место": null,
+              "2 место": null,
+              "3 место": null,
+              "участник": null
+            }
+          }
+        }
+      },
+      "интеллектуалы 21в.": {
+        sub: {
+          "предмет": {
+            inputType: 'text',
+            placeholder: 'Введите предмет (физика, химия...)',
+            sub: {
+              "1 место": null,
+              "2 место": null,
+              "3 место": null,
+              "участник": null
+            }
+          }
+        }
+      },
+      "прочее": {
+        sub: {
+          "предмет": {
+            inputType: 'text',
+            placeholder: 'Введите предмет (физика, химия...)',
+            sub: {
+              "1 место": null,
+              "2 место": null,
+              "3 место": null,
+              "участник": null
+            }
+          }
+        }
+      }
+    }
+  },
+  "олимпиада": {
+    sub: {
+      "олимп 74": {
+        sub: {
+          "предмет": {
+            inputType: 'text',
+            placeholder: 'Введите предмет (математика, английский...)',
+            sub: {
+              "1 место": null,
+              "2 место": null,
+              "3 место": null,
+              "участник": null
+            }
+          }
+        }
+      },
+      "сириус": {
+        sub: {
+          "предмет": {
+            inputType: 'text',
+            placeholder: 'Введите предмет (математика, английский...)',
+            sub: {
+              "1 место": null,
+              "2 место": null,
+              "3 место": null,
+              "участник": null
+            }
+          }
+        }
+      },
+      "всош": {
+        sub: {
+          "предмет": {
+            inputType: 'text',
+            placeholder: 'Введите предмет (математика, английский...)',
+            sub: {
+              "1 место": null,
+              "2 место": null,
+              "3 место": null,
+              "участник": null
+            }
+          }
+        }
+      },
+      "прочее": {
+        sub: {
+          "предмет": {
+            inputType: 'text',
+            placeholder: 'Введите предмет (математика, английский...)',
+            sub: {
+              "1 место": null,
+              "2 место": null,
+              "3 место": null,
+              "участник": null
+            }
+          }
+        }
+      }
+    }
+  },
+  "творчество": {
+    sub: {
+      "музыка": null,
+      "изо": null
+    }
+  }
+};
+
+// ============================================================
+// 2. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+// ============================================================
+function escapeHtml(text) {
+  if (!text) return '';
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function getClassDisplayWithQuotes(user) {
+  const num = user.classNumber || '';
+  const letter = user.classLetter || '';
+  return letter ? `${num}"${letter}"` : `${num}${letter}`;
+}
+
+function validateRussianLetter(letter) {
+  return /^[А-ЯЁ]$/i.test(letter);
+}
+
+const authorCache = {};
+async function fetchAuthorName(userId) {
+  if (authorCache[userId]) return authorCache[userId];
+  try {
+    const userQuery = query(collection(db, 'users'), where('uid', '==', userId));
+    const userSnap = await getDocs(userQuery);
+    if (!userSnap.empty) {
+      const userData = userSnap.docs[0].data();
+      const name = userData.fullName || userData.firstName || 'Неизвестно';
+      const cls = userData.classLetter ? ` (${getClassDisplayWithQuotes(userData)})` : '';
+      authorCache[userId] = name + cls;
+      return authorCache[userId];
+    }
+  } catch (e) {
+    console.error('Ошибка получения автора:', e);
+  }
+  return 'Неизвестно';
+}
+
+// ============================================================
+// 3. ФУНКЦИИ ДЛЯ ИЕРАРХИЧЕСКИХ КАТЕГОРИЙ (КАСКАДНЫЕ СПИСКИ)
+// ============================================================
+function populateSelect(selectElement, options, defaultText = 'Выберите...') {
+  selectElement.innerHTML = `<option value="">${defaultText}</option>`;
+  if (!options) return;
+  Object.keys(options).forEach(key => {
+    const option = document.createElement('option');
+    option.value = key;
+    option.textContent = key.charAt(0).toUpperCase() + key.slice(1);
+    selectElement.appendChild(option);
+  });
+}
+
+function handleLevel1Change() {
+  const level1 = document.getElementById('catLevel1');
+  const level2 = document.getElementById('catLevel2');
+  const level3 = document.getElementById('catLevel3');
+  const textInputContainer = document.getElementById('catTextInputContainer');
+  const placeSelect = document.getElementById('catLevelPlace');
+
+  const selectedKey = level1.value;
+  level2.style.display = 'none';
+  level3.style.display = 'none';
+  textInputContainer.style.display = 'none';
+  placeSelect.style.display = 'none';
+  level2.innerHTML = '<option value="">Выберите категорию</option>';
+  level3.innerHTML = '<option value="">Выберите детали</option>';
+  placeSelect.value = '';
+
+  if (selectedKey) {
+    const l1Config = CATEGORIES_CONFIG[selectedKey];
+    if (l1Config && l1Config.sub) {
+      const options = {};
+      Object.keys(l1Config.sub).forEach(key => {
+        options[key] = l1Config.sub[key];
+      });
+      populateSelect(level2, options, 'Выберите категорию');
+      level2.style.display = 'block';
+    }
+  }
+}
+
+function handleLevel2Change() {
+  const level1 = document.getElementById('catLevel1');
+  const level2 = document.getElementById('catLevel2');
+  const level3 = document.getElementById('catLevel3');
+  const textInputContainer = document.getElementById('catTextInputContainer');
+  const placeSelect = document.getElementById('catLevelPlace');
+
+  const l1Key = level1.value;
+  const l2Key = level2.value;
+
+  level3.style.display = 'none';
+  textInputContainer.style.display = 'none';
+  placeSelect.style.display = 'none';
+  level3.innerHTML = '<option value="">Выберите детали</option>';
+  placeSelect.value = '';
+
+  if (l1Key && l2Key) {
+    const l2Config = CATEGORIES_CONFIG[l1Key].sub[l2Key];
+    if (l2Config && l2Config.sub) {
+      const options = {};
+      Object.keys(l2Config.sub).forEach(key => {
+        options[key] = l2Config.sub[key];
+      });
+      populateSelect(level3, options, 'Выберите детали');
+      level3.style.display = 'block';
+    } else if (l2Config && l2Config.inputType === 'text') {
+      const textInput = document.getElementById('catTextInput');
+      textInput.placeholder = l2Config.placeholder || 'Введите значение';
+      textInput.value = '';
+      textInputContainer.style.display = 'block';
+      if (l2Config.sub && l2Config.sub['1 место']) {
+        placeSelect.style.display = 'block';
+      } else if (l2Config.sub && l2Config.sub['золото']) {
+        placeSelect.style.display = 'block';
+      }
+    } else {
+      if (l2Config && l2Config.sub && l2Config.sub['1 место']) {
+        placeSelect.style.display = 'block';
+      } else if (l2Config && l2Config.sub && l2Config.sub['золото']) {
+        placeSelect.style.display = 'block';
+      }
+    }
+  }
+}
+
+function handleLevel3Change() {
+  const level1 = document.getElementById('catLevel1');
+  const level2 = document.getElementById('catLevel2');
+  const level3 = document.getElementById('catLevel3');
+  const textInputContainer = document.getElementById('catTextInputContainer');
+  const placeSelect = document.getElementById('catLevelPlace');
+
+  const l1Key = level1.value;
+  const l2Key = level2.value;
+  const l3Key = level3.value;
+
+  textInputContainer.style.display = 'none';
+  placeSelect.style.display = 'none';
+  placeSelect.value = '';
+
+  if (l1Key && l2Key && l3Key) {
+    const l3Config = CATEGORIES_CONFIG[l1Key].sub[l2Key].sub[l3Key];
+    if (l3Config && l3Config.inputType === 'text') {
+      const textInput = document.getElementById('catTextInput');
+      textInput.placeholder = l3Config.placeholder || 'Введите значение';
+      textInput.value = '';
+      textInputContainer.style.display = 'block';
+    }
+    if (l3Config && l3Config.sub && l3Config.sub['1 место']) {
+      placeSelect.style.display = 'block';
+    } else if (l3Config && l3Config.sub && l3Config.sub['золото']) {
+      placeSelect.style.display = 'block';
+    }
+  }
+}
+
+function getFullCategoryPath() {
+  const level1 = document.getElementById('catLevel1');
+  const level2 = document.getElementById('catLevel2');
+  const level3 = document.getElementById('catLevel3');
+  const textInput = document.getElementById('catTextInput');
+  const placeSelect = document.getElementById('catLevelPlace');
+
+  let path = level1.value;
+  if (level2.value) path += '/' + level2.value;
+  if (level3.value) path += '/' + level3.value;
+  if (textInput.value && document.getElementById('catTextInputContainer').style.display !== 'none') {
+    path += '/' + textInput.value;
+  }
+  if (placeSelect.value && placeSelect.style.display !== 'none') {
+    path += '/' + placeSelect.value;
+  }
+  return path;
+}
+
+function initCategorySelectors() {
+  const level1 = document.getElementById('catLevel1');
+  const level2 = document.getElementById('catLevel2');
+  const level3 = document.getElementById('catLevel3');
+  const textInputContainer = document.getElementById('catTextInputContainer');
+  const placeSelect = document.getElementById('catLevelPlace');
+
+  level2.style.display = 'none';
+  level3.style.display = 'none';
+  textInputContainer.style.display = 'none';
+  placeSelect.style.display = 'none';
+
+  populateSelect(level1, CATEGORIES_CONFIG, 'Выберите направление');
+  level1.onchange = handleLevel1Change;
+  level2.onchange = handleLevel2Change;
+  level3.onchange = handleLevel3Change;
+}
+
+// ============================================================
+// 4. DOM-ЭЛЕМЕНТЫ И СОСТОЯНИЯ
+// ============================================================
 const authContainer = document.getElementById('authContainer');
 const appContent = document.getElementById('appContent');
 const loginForm = document.getElementById('loginForm');
@@ -38,18 +387,9 @@ let currentViewType = null;
 let currentViewUid = null;
 let userLikesSet = new Set();
 
-// ---- Утилиты ----
-function getClassDisplayWithQuotes(user) {
-  const num = user.classNumber || '';
-  const letter = user.classLetter || '';
-  return letter ? `${num}"${letter}"` : `${num}${letter}`;
-}
-
-function validateRussianLetter(letter) {
-  return /^[А-ЯЁ]$/i.test(letter);
-}
-
-// ---- Управление видимостью главного содержимого ----
+// ============================================================
+// 5. УПРАВЛЕНИЕ ВИДИМОСТЬЮ
+// ============================================================
 function hideMainContent() {
   if (mainFeed) mainFeed.style.display = 'none';
   pageContainer.style.display = 'block';
@@ -64,7 +404,6 @@ function showMainContent() {
   currentViewUid = null;
 }
 
-// ---- Закрытие модалки ----
 function closeModal() {
   modal.style.display = 'none';
   loadNewAchievement();
@@ -79,7 +418,9 @@ function refreshCurrentView() {
   }
 }
 
-// ---- Загрузка лайков ----
+// ============================================================
+// 6. ЗАГРУЗКА ЛАЙКОВ
+// ============================================================
 async function loadUserLikes() {
   if (!currentUser) return;
   try {
@@ -92,7 +433,9 @@ async function loadUserLikes() {
   }
 }
 
-// ---- Авторизация ----
+// ============================================================
+// 7. АВТОРИЗАЦИЯ
+// ============================================================
 showRegisterLink.addEventListener('click', (e) => {
   e.preventDefault();
   loginForm.style.display = 'none';
@@ -115,7 +458,6 @@ loginBtn.addEventListener('click', async () => {
   }
 });
 
-// ---- Регистрация с проверкой русской буквы ----
 registerBtn.addEventListener('click', async () => {
   const firstName = document.getElementById('regFirstName').value.trim();
   const lastName = document.getElementById('regLastName').value.trim();
@@ -127,6 +469,11 @@ registerBtn.addEventListener('click', async () => {
 
   if (!firstName || !lastName || !email || !password || !classNumber || !classLetterRaw) {
     alert('Заполните все обязательные поля (Имя, Фамилия, Email, Пароль, Номер и Буква класса)');
+    return;
+  }
+
+  if (parseInt(classNumber) < 1 || parseInt(classNumber) > 11) {
+    alert('Номер класса должен быть от 1 до 11');
     return;
   }
 
@@ -175,7 +522,9 @@ logoutBtn.addEventListener('click', async () => {
   await signOut(auth);
 });
 
-// ---- Отслеживание состояния входа ----
+// ============================================================
+// 8. ОТСЛЕЖИВАНИЕ СОСТОЯНИЯ ВХОДА
+// ============================================================
 onAuthStateChanged(auth, async (user) => {
   if (user) {
     currentUser = user;
@@ -187,6 +536,11 @@ onAuthStateChanged(auth, async (user) => {
       currentUserDoc = { id: snap.docs[0].id, ...snap.docs[0].data() };
     }
     await loadUserLikes();
+    if (currentUserDoc && currentUserDoc.role === 'teacher') {
+      showStatisticsLink.style.display = 'block';
+    } else {
+      showStatisticsLink.style.display = 'none';
+    }
     showMainContent();
     loadNewAchievement();
   } else {
@@ -197,17 +551,20 @@ onAuthStateChanged(auth, async (user) => {
     appContent.style.display = 'none';
     loginForm.style.display = 'block';
     registerForm.style.display = 'none';
+    showStatisticsLink.style.display = 'none';
   }
 });
 
-// ---- Добавление достижения ----
+// ============================================================
+// 9. ДОБАВЛЕНИЕ ДОСТИЖЕНИЯ
+// ============================================================
 async function addAchievement(title, category, description) {
   try {
     await addDoc(collection(db, 'achievements'), {
       userId: currentUser.uid,
-      title,
+      title: title.trim(),
       category,
-      description,
+      description: description.trim(),
       likesCount: 0,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -220,7 +577,9 @@ async function addAchievement(title, category, description) {
   }
 }
 
-// ---- Обновление профиля с проверкой русской буквы ----
+// ============================================================
+// 10. ОБНОВЛЕНИЕ ПРОФИЛЯ
+// ============================================================
 async function updateUserProfile({ firstName, lastName, classNumber, classLetter, birthDate }) {
   if (!currentUser || !currentUserDoc) return;
   try {
@@ -229,7 +588,14 @@ async function updateUserProfile({ firstName, lastName, classNumber, classLetter
 
     if (firstName !== undefined) updateData.firstName = firstName.trim();
     if (lastName !== undefined) updateData.lastName = lastName.trim();
-    if (classNumber !== undefined) updateData.classNumber = parseInt(classNumber);
+    if (classNumber !== undefined) {
+      const num = parseInt(classNumber);
+      if (num < 1 || num > 11) {
+        alert('Номер класса должен быть от 1 до 11');
+        return;
+      }
+      updateData.classNumber = num;
+    }
     if (classLetter !== undefined) {
       const letter = classLetter.trim().toUpperCase();
       if (!validateRussianLetter(letter)) {
@@ -247,7 +613,6 @@ async function updateUserProfile({ firstName, lastName, classNumber, classLetter
       updateData.classDisplay = `${num}${letr}`;
     }
 
-    // Обработка даты рождения
     if (birthDate === null || birthDate === '') {
       updateData.birthDate = deleteField();
       updateData.age = deleteField();
@@ -264,11 +629,9 @@ async function updateUserProfile({ firstName, lastName, classNumber, classLetter
     }
 
     await updateDoc(userRef, updateData);
-    // Обновляем локальный кэш
-    Object.assign(currentUserDoc, updateData);
-    if (updateData.birthDate === deleteField()) {
-      delete currentUserDoc.birthDate;
-      delete currentUserDoc.age;
+    const freshSnap = await getDoc(userRef);
+    if (freshSnap.exists()) {
+      currentUserDoc = { id: freshSnap.id, ...freshSnap.data() };
     }
     showUserProfile(currentUser.uid);
     loadNewAchievement();
@@ -278,10 +641,14 @@ async function updateUserProfile({ firstName, lastName, classNumber, classLetter
   }
 }
 
-// ---- Загрузка ленты новых достижений ----
+// ============================================================
+// 11. ЛЕНТА НОВЫХ ДОСТИЖЕНИЙ
+// ============================================================
 async function loadNewAchievement() {
   if (!currentUser) return;
   try {
+    newAchievementCard.innerHTML = `<div class="feed__card-placeholder">Загрузка...</div>`;
+
     const qAchievements = query(
       collection(db, 'achievements'),
       where('isDeleted', '==', false)
@@ -312,26 +679,19 @@ async function loadNewAchievement() {
     }
 
     const latest = newAchievements[0];
-    let authorName = 'Неизвестно';
-    let authorClass = '';
-    try {
-      const userQuery = query(collection(db, 'users'), where('uid', '==', latest.userId));
-      const userSnap = await getDocs(userQuery);
-      if (!userSnap.empty) {
-        const userData = userSnap.docs[0].data();
-        authorName = userData.fullName || userData.firstName || 'Неизвестно';
-        authorClass = userData.classLetter ? ` (${getClassDisplayWithQuotes(userData)})` : '';
-      }
-    } catch (e) {
-      console.error('Ошибка получения автора:', e);
-    }
+    const authorName = await fetchAuthorName(latest.userId);
+
+    const safeTitle = escapeHtml(latest.title);
+    const safeCategory = escapeHtml(latest.category || 'без категории');
+    const safeAuthor = escapeHtml(authorName);
+    const safeDate = latest.createdAt ? new Date(latest.createdAt.seconds * 1000).toLocaleString() : '';
 
     newAchievementCard.innerHTML = `
       <div style="text-align:left; width:100%;">
-        <h4>${latest.title}</h4>
-        <p><strong>Категория:</strong> ${latest.category || 'без категории'}</p>
-        <p><strong>Автор:</strong> ${authorName}${authorClass}</p>
-        <small>${latest.createdAt ? new Date(latest.createdAt.seconds * 1000).toLocaleString() : ''}</small>
+        <h4>${safeTitle}</h4>
+        <p><strong>Категория:</strong> ${safeCategory}</p>
+        <p><strong>Автор:</strong> ${safeAuthor}</p>
+        <small>${safeDate}</small>
       </div>
     `;
 
@@ -345,30 +705,12 @@ async function loadNewAchievement() {
   }
 }
 
-// ---- Модальное окно с новыми достижениями ----
+// ============================================================
+// 12. МОДАЛЬНОЕ ОКНО С НОВЫМИ ДОСТИЖЕНИЯМИ
+// ============================================================
 async function showNewAchievementsModal(achievements) {
   let currentIndex = 0;
   const total = achievements.length;
-
-  const authorCache = {};
-
-  async function getAuthorName(userId) {
-    if (authorCache[userId]) return authorCache[userId];
-    try {
-      const userQuery = query(collection(db, 'users'), where('uid', '==', userId));
-      const userSnap = await getDocs(userQuery);
-      if (!userSnap.empty) {
-        const userData = userSnap.docs[0].data();
-        const name = userData.fullName || userData.firstName || 'Неизвестно';
-        const cls = userData.classLetter ? ` (${getClassDisplayWithQuotes(userData)})` : '';
-        authorCache[userId] = name + cls;
-        return authorCache[userId];
-      }
-    } catch (e) {
-      console.error('Ошибка получения автора:', e);
-    }
-    return 'Неизвестно';
-  }
 
   async function renderCard(index) {
     if (index >= total) {
@@ -381,19 +723,24 @@ async function showNewAchievementsModal(achievements) {
     }
     const a = achievements[index];
     const dateStr = a.createdAt ? new Date(a.createdAt.seconds * 1000).toLocaleString() : '';
-    const author = await getAuthorName(a.userId);
+    const author = await fetchAuthorName(a.userId);
     const liked = userLikesSet.has(a.id);
     const likeIcon = liked ? '♥' : '♡';
 
+    const safeTitle = escapeHtml(a.title);
+    const safeCategory = escapeHtml(a.category || 'без категории');
+    const safeAuthor = escapeHtml(author);
+    const safeDate = escapeHtml(dateStr);
+
     modalBody.innerHTML = `
       <div style="text-align:left;">
-        <h3>${a.title}</h3>
-        <p><strong>Категория:</strong> ${a.category || 'без категории'}</p>
-        <p><strong>Автор:</strong> ${author}</p>
-        <p><small>${dateStr}</small></p>
+        <h3>${safeTitle}</h3>
+        <p><strong>Категория:</strong> ${safeCategory}</p>
+        <p><strong>Автор:</strong> ${safeAuthor}</p>
+        <p><small>${safeDate}</small></p>
         <div style="margin-top:20px;">
           <button id="prevCardBtn" ${index === 0 ? 'disabled' : ''}>◀ Назад</button>
-          <button id="nextCardBtn" ${index === total-1 ? 'disabled' : ''}>Вперёд ▶</button>
+          <button id="nextCardBtn" ${index === total - 1 ? 'disabled' : ''}>Вперёд ▶</button>
           <button id="viewFullBtn">Подробнее</button>
         </div>
         <div style="margin-top:10px;">
@@ -410,7 +757,7 @@ async function showNewAchievementsModal(achievements) {
       }
     });
     document.getElementById('nextCardBtn')?.addEventListener('click', async () => {
-      if (currentIndex < total-1) {
+      if (currentIndex < total - 1) {
         currentIndex++;
         await renderCard(currentIndex);
         await markAsViewed(achievements[currentIndex].id);
@@ -431,7 +778,9 @@ async function showNewAchievementsModal(achievements) {
   await renderCard(0);
 }
 
-// ---- Отметка просмотра ----
+// ============================================================
+// 13. ОТМЕТКА ПРОСМОТРА
+// ============================================================
 async function markAsViewed(achievementId) {
   if (!currentUser) return;
   try {
@@ -453,7 +802,9 @@ async function markAsViewed(achievementId) {
   }
 }
 
-// ---- Полная информация о достижении ----
+// ============================================================
+// 14. ПОЛНАЯ ИНФОРМАЦИЯ О ДОСТИЖЕНИИ
+// ============================================================
 async function showFullAchievement(achievementId) {
   console.log('showFullAchievement вызвана с ID:', achievementId);
   try {
@@ -464,22 +815,26 @@ async function showFullAchievement(achievementId) {
       return;
     }
     const a = docSnap.data();
-    const userQuery = query(collection(db, 'users'), where('uid', '==', a.userId));
-    const userSnap = await getDocs(userQuery);
-    const authorName = userSnap.empty ? 'Неизвестно' : (userSnap.docs[0].data().fullName || userSnap.docs[0].data().firstName || 'Неизвестно');
+    const authorName = await fetchAuthorName(a.userId);
     const isAuthor = currentUser && a.userId === currentUser.uid;
     const liked = userLikesSet.has(achievementId);
     const likeIcon = liked ? '♥' : '♡';
 
     markAsViewed(achievementId);
 
+    const safeTitle = escapeHtml(a.title);
+    const safeAuthor = escapeHtml(authorName);
+    const safeCategory = escapeHtml(a.category);
+    const safeDate = a.createdAt ? new Date(a.createdAt.seconds * 1000).toLocaleString() : '';
+    const safeDesc = escapeHtml(a.description || '');
+
     modalBody.innerHTML = `
       <div style="text-align:left;">
-        <h2>${a.title}</h2>
-        <p><strong>Автор:</strong> ${authorName}</p>
-        <p><strong>Категория:</strong> ${a.category}</p>
-        <p><strong>Дата:</strong> ${a.createdAt ? new Date(a.createdAt.seconds * 1000).toLocaleString() : ''}</p>
-        <p><strong>Описание:</strong> ${a.description || ''}</p>
+        <h2>${safeTitle}</h2>
+        <p><strong>Автор:</strong> ${safeAuthor}</p>
+        <p><strong>Категория:</strong> ${safeCategory}</p>
+        <p><strong>Дата:</strong> ${safeDate}</p>
+        <p><strong>Описание:</strong> ${safeDesc}</p>
         <div style="margin-top:15px;">
           <button id="likeFullBtn" class="like-btn" style="background:none; border:none; font-size:1.2rem; font-family: 'Segoe UI', Arial, sans-serif; font-variant-emoji: text; cursor:pointer; color:${liked ? '#FF0000' : '#888'};">${likeIcon} ${a.likesCount || 0}</button>
           ${isAuthor ? `<button id="deleteFullBtn" style="margin-left:10px;background:red;color:white;border:none;padding:5px 15px;border-radius:6px;cursor:pointer;">Удалить</button>` : ''}
@@ -521,7 +876,9 @@ async function showFullAchievement(achievementId) {
   }
 }
 
-// ---- Лайк ----
+// ============================================================
+// 15. ЛАЙКИ (Атомарное обновление)
+// ============================================================
 async function toggleLike(achievementId) {
   if (!currentUser) return;
   try {
@@ -540,7 +897,6 @@ async function toggleLike(achievementId) {
       where('achievementId', '==', achievementId)
     );
     const snap = await getDocs(q);
-    const currentLikes = achievementData.likesCount || 0;
 
     if (snap.empty) {
       await addDoc(collection(db, 'likes'), {
@@ -548,11 +904,11 @@ async function toggleLike(achievementId) {
         achievementId: achievementId,
         createdAt: serverTimestamp()
       });
-      await updateDoc(achRef, { likesCount: currentLikes + 1 });
+      await updateDoc(achRef, { likesCount: increment(1) });
       userLikesSet.add(achievementId);
     } else {
       await deleteDoc(doc(db, 'likes', snap.docs[0].id));
-      await updateDoc(achRef, { likesCount: Math.max(0, currentLikes - 1) });
+      await updateDoc(achRef, { likesCount: increment(-1) });
       userLikesSet.delete(achievementId);
     }
   } catch (e) {
@@ -560,7 +916,9 @@ async function toggleLike(achievementId) {
   }
 }
 
-// ---- Список учеников (отображаем класс с кавычками) ----
+// ============================================================
+// 16. СПИСОК УЧЕНИКОВ
+// ============================================================
 async function showStudents() {
   currentViewType = 'students';
   currentViewUid = null;
@@ -573,7 +931,7 @@ async function showStudents() {
       const u = doc.data();
       const displayName = u.fullName || u.firstName || 'Без имени';
       const classDisplay = u.classLetter ? getClassDisplayWithQuotes(u) : (u.classDisplay || '?');
-      html += `<div class="user-card" data-uid="${u.uid}">${displayName} (${classDisplay})</div>`;
+      html += `<div class="user-card" data-uid="${escapeHtml(u.uid)}">${escapeHtml(displayName)} (${escapeHtml(classDisplay)})</div>`;
     });
     html += `<div style="margin-top:30px;"><button id="backToMainBtn" class="btn-primary">На главную</button></div>`;
     pageContainer.innerHTML = html;
@@ -586,7 +944,9 @@ async function showStudents() {
   }
 }
 
-// ---- Профиль ученика ----
+// ============================================================
+// 17. ПРОФИЛЬ УЧЕНИКА
+// ============================================================
 async function showUserProfile(uid) {
   currentViewType = 'profile';
   currentViewUid = uid;
@@ -600,8 +960,7 @@ async function showUserProfile(uid) {
 
     const displayName = user.fullName || user.firstName || 'Без имени';
     const classDisplay = user.classLetter ? getClassDisplayWithQuotes(user) : (user.classDisplay || '?');
-    
-    // Вычисляем возраст
+
     let ageText = 'не указан';
     if (user.birthDate) {
       const birth = new Date(user.birthDate);
@@ -631,17 +990,13 @@ async function showUserProfile(uid) {
       editFormHtml = `
         <div id="editProfileForm" style="display:none; margin-bottom:15px; background:#f5f5f5; padding:20px; border-radius:8px;">
           <h4>Редактировать профиль</h4>
-          <input type="text" id="editFirstName" placeholder="Имя" value="${currentFirstName}" style="width:100%; padding:8px; margin:5px 0; border:1px solid #ccc; border-radius:6px;" />
-          <input type="text" id="editLastName" placeholder="Фамилия" value="${currentLastName}" style="width:100%; padding:8px; margin:5px 0; border:1px solid #ccc; border-radius:6px;" />
+          <input type="text" id="editFirstName" placeholder="Имя" value="${escapeHtml(currentFirstName)}" style="width:100%; padding:8px; margin:5px 0; border:1px solid #ccc; border-radius:6px;" />
+          <input type="text" id="editLastName" placeholder="Фамилия" value="${escapeHtml(currentLastName)}" style="width:100%; padding:8px; margin:5px 0; border:1px solid #ccc; border-radius:6px;" />
           <div style="display:flex; gap:10px; align-items:center; margin:5px 0;">
-            <label>Класс: 
-              <input type="number" id="editClassNumber" value="${currentClassNumber}" style="width:80px;" required />
-            </label>
-            <label>Буква:
-              <input type="text" id="editClassLetter" value="${currentClassLetter}" style="width:60px;" required maxlength="1" />
-            </label>
+            <label>Класс: <input type="number" id="editClassNumber" value="${escapeHtml(String(currentClassNumber))}" style="width:80px;" required min="1" max="11" /></label>
+            <label>Буква: <input type="text" id="editClassLetter" value="${escapeHtml(currentClassLetter)}" style="width:60px;" required maxlength="1" /></label>
           </div>
-          <label>Дата рождения: <input type="date" id="editBirthDate" value="${currentBirthDate}" style="padding:6px; border-radius:4px; border:1px solid #ccc;" /></label>
+          <label>Дата рождения: <input type="date" id="editBirthDate" value="${escapeHtml(currentBirthDate)}" style="padding:6px; border-radius:4px; border:1px solid #ccc;" /></label>
           <div style="margin-top:10px;">
             <button id="saveProfileBtn" style="background:#800020; color:white; border:none; padding:6px 16px; border-radius:6px; cursor:pointer;">Сохранить</button>
             <button id="cancelEditBtn" style="background:#ccc; border:none; padding:6px 16px; border-radius:6px; cursor:pointer;">Отмена</button>
@@ -650,7 +1005,7 @@ async function showUserProfile(uid) {
       `;
     }
 
-    // Кнопка добавления достижения
+    // Кнопка добавления достижения + каскадные категории (только в своём профиле)
     let addButtonHtml = '';
     let addFormHtml = '';
     if (isOwnProfile) {
@@ -659,13 +1014,33 @@ async function showUserProfile(uid) {
         <div id="addAchievementForm" style="display:none; margin-bottom:15px; background:#f5f5f5; padding:20px; border-radius:8px;">
           <h4>Новое достижение</h4>
           <input type="text" id="achTitle" placeholder="Название" style="width:100%; padding:8px; margin:5px 0; border:1px solid #ccc; border-radius:6px;" />
-          <select id="achCategory" style="width:100%; padding:8px; margin:5px 0; border:1px solid #ccc; border-radius:6px;">
-            <option value="учёба">Учёба</option>
-            <option value="спорт">Спорт</option>
-            <option value="проекты">Проекты</option>
-            <option value="олимпиады">Олимпиады</option>
-            <option value="творчество">Творчество</option>
-          </select>
+          
+          <!-- КАСКАДНЫЕ СПИСКИ КАТЕГОРИЙ -->
+          <div id="categoryContainer" style="margin:5px 0;">
+            <select id="catLevel1" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:6px;">
+              <option value="">Выберите направление</option>
+            </select>
+            <select id="catLevel2" style="display:none; width:100%; padding:8px; margin-top:5px; border:1px solid #ccc; border-radius:6px;">
+              <option value="">Выберите категорию</option>
+            </select>
+            <select id="catLevel3" style="display:none; width:100%; padding:8px; margin-top:5px; border:1px solid #ccc; border-radius:6px;">
+              <option value="">Выберите детали</option>
+            </select>
+            <div id="catTextInputContainer" style="display:none; margin-top:5px;">
+              <input type="text" id="catTextInput" placeholder="" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:6px;" />
+            </div>
+            <select id="catLevelPlace" style="display:none; width:100%; padding:8px; margin-top:5px; border:1px solid #ccc; border-radius:6px;">
+              <option value="">Выберите результат</option>
+              <option value="золото">🥇 Золото</option>
+              <option value="серебро">🥈 Серебро</option>
+              <option value="бронза">🥉 Бронза</option>
+              <option value="1 место">🥇 1 место</option>
+              <option value="2 место">🥈 2 место</option>
+              <option value="3 место">🥉 3 место</option>
+              <option value="участник">Участник</option>
+            </select>
+          </div>
+          
           <textarea id="achDescription" placeholder="Описание. Ссылки на фото можно вставить сюда (Google Диск, Яндекс Диск и т.п.)" rows="4" style="width:100%; padding:8px; margin:5px 0; border:1px solid #ccc; border-radius:6px;"></textarea>
           <button id="submitAchievementBtn" style="background:#800020; color:white; border:none; padding:8px 16px; border-radius:6px; cursor:pointer;">Опубликовать</button>
           <button id="cancelAddAchievementBtn" style="background:#ccc; border:none; padding:8px 16px; border-radius:6px; cursor:pointer; margin-left:5px;">Отмена</button>
@@ -684,10 +1059,10 @@ async function showUserProfile(uid) {
     achievements.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
 
     let html = `
-      <h2>${displayName}</h2>
-      ${user.avatarUrl ? `<img src="${user.avatarUrl}" style="max-width:150px;border-radius:50%;"/>` : ''}
-      <p>Класс: ${classDisplay}</p>
-      <p>Возраст: ${ageText}</p>
+      <h2>${escapeHtml(displayName)}</h2>
+      ${user.avatarUrl ? `<img src="${escapeHtml(user.avatarUrl)}" style="max-width:150px;border-radius:50%;"/>` : ''}
+      <p>Класс: ${escapeHtml(classDisplay)}</p>
+      <p>Возраст: ${escapeHtml(ageText)}</p>
       ${editButtonHtml}
       ${editFormHtml}
       <hr/>
@@ -700,23 +1075,26 @@ async function showUserProfile(uid) {
       </div>
       <div id="achievementsList">
         ${achievements.map(a => {
-          const liked = userLikesSet.has(a.id);
-          const likeIcon = liked ? '♥' : '♡';
-          return `
-            <div class="achievement-item" data-id="${a.id}" style="cursor:pointer; padding:10px; border-bottom:1px solid #eee;">
-              <h4>${a.title}</h4>
-              <p><strong>Категория:</strong> ${a.category || 'без категории'}</p>
+      const liked = userLikesSet.has(a.id);
+      const likeIcon = liked ? '♥' : '♡';
+      const safeTitle = escapeHtml(a.title);
+      const safeCategory = escapeHtml(a.category || 'без категории');
+      return `
+            <div class="achievement-item" data-id="${escapeHtml(a.id)}" style="cursor:pointer; padding:10px; border-bottom:1px solid #eee;">
+              <h4>${safeTitle}</h4>
+              <p><strong>Категория:</strong> ${safeCategory}</p>
               <small><span class="like-icon" style="font-size:1.1rem; font-family: 'Segoe UI', Arial, sans-serif; font-variant-emoji: text; color:${liked ? '#FF0000' : '#888'};">${likeIcon}</span> ${a.likesCount || 0}</small>
             </div>
           `;
-        }).join('')}
+    }).join('')}
       </div>
       <div style="margin-top:30px;"><button id="backToMainBtn" class="btn-primary">На главную</button></div>
     `;
     pageContainer.innerHTML = html;
 
-    // ---- Обработчики редактирования ----
+    // --- Обработчики для кнопок в профиле ---
     if (isOwnProfile) {
+      // Редактирование профиля
       const editBtn = document.getElementById('editProfileBtn');
       const editForm = document.getElementById('editProfileForm');
       const saveBtn = document.getElementById('saveProfileBtn');
@@ -749,6 +1127,11 @@ async function showUserProfile(uid) {
             return;
           }
 
+          if (parseInt(classNumber) < 1 || parseInt(classNumber) > 11) {
+            alert('Номер класса должен быть от 1 до 11');
+            return;
+          }
+
           classLetter = classLetter.toUpperCase();
           if (!validateRussianLetter(classLetter)) {
             alert('Буква класса должна быть русской (например, А, Б, В)');
@@ -768,7 +1151,7 @@ async function showUserProfile(uid) {
         });
       }
 
-      // Обработчики для добавления достижения
+      // Добавление достижения
       const showAddBtn = document.getElementById('showAddAchievementBtn');
       const addFormEl = document.getElementById('addAchievementForm');
       const submitBtn = document.getElementById('submitAchievementBtn');
@@ -776,24 +1159,42 @@ async function showUserProfile(uid) {
 
       if (showAddBtn) {
         showAddBtn.addEventListener('click', () => {
-          addFormEl.style.display = addFormEl.style.display === 'block' ? 'none' : 'block';
+          if (addFormEl.style.display === 'block') {
+            addFormEl.style.display = 'none';
+          } else {
+            addFormEl.style.display = 'block';
+            // Инициализируем каскадные списки при открытии формы
+            initCategorySelectors();
+          }
         });
       }
       if (submitBtn) {
         submitBtn.addEventListener('click', async () => {
           const title = document.getElementById('achTitle').value;
-          const category = document.getElementById('achCategory').value;
+          const category = getFullCategoryPath();
           const description = document.getElementById('achDescription').value;
-          if (!title || !description) {
-            alert('Заполните название и описание');
+
+          if (!title || !category) {
+            alert('Заполните название и категорию');
             return;
           }
+
           const success = await addAchievement(title, category, description);
           if (success) {
             alert('Достижение добавлено!');
             addFormEl.style.display = 'none';
             document.getElementById('achTitle').value = '';
             document.getElementById('achDescription').value = '';
+            // Сброс категорий
+            document.getElementById('catLevel1').value = '';
+            document.getElementById('catLevel2').innerHTML = '<option value="">Выберите категорию</option>';
+            document.getElementById('catLevel3').innerHTML = '<option value="">Выберите детали</option>';
+            document.getElementById('catTextInput').value = '';
+            document.getElementById('catLevelPlace').value = '';
+            document.getElementById('catLevel2').style.display = 'none';
+            document.getElementById('catLevel3').style.display = 'none';
+            document.getElementById('catTextInputContainer').style.display = 'none';
+            document.getElementById('catLevelPlace').style.display = 'none';
             showUserProfile(uid);
             loadNewAchievement();
           } else {
@@ -806,6 +1207,15 @@ async function showUserProfile(uid) {
           addFormEl.style.display = 'none';
           document.getElementById('achTitle').value = '';
           document.getElementById('achDescription').value = '';
+          document.getElementById('catLevel1').value = '';
+          document.getElementById('catLevel2').innerHTML = '<option value="">Выберите категорию</option>';
+          document.getElementById('catLevel3').innerHTML = '<option value="">Выберите детали</option>';
+          document.getElementById('catTextInput').value = '';
+          document.getElementById('catLevelPlace').value = '';
+          document.getElementById('catLevel2').style.display = 'none';
+          document.getElementById('catLevel3').style.display = 'none';
+          document.getElementById('catTextInputContainer').style.display = 'none';
+          document.getElementById('catLevelPlace').style.display = 'none';
         });
       }
     }
@@ -837,41 +1247,26 @@ function renderAchievementsList(achievements) {
   container.innerHTML = achievements.map(a => {
     const liked = userLikesSet.has(a.id);
     const likeIcon = liked ? '♥' : '♡';
+    const safeTitle = escapeHtml(a.title);
+    const safeCategory = escapeHtml(a.category || 'без категории');
     return `
-      <div class="achievement-item" data-id="${a.id}" style="cursor:pointer; padding:10px; border-bottom:1px solid #eee;">
-        <h4>${a.title}</h4>
-        <p><strong>Категория:</strong> ${a.category || 'без категории'}</p>
+      <div class="achievement-item" data-id="${escapeHtml(a.id)}" style="cursor:pointer; padding:10px; border-bottom:1px solid #eee;">
+        <h4>${safeTitle}</h4>
+        <p><strong>Категория:</strong> ${safeCategory}</p>
         <small><span class="like-icon" style="font-size:1.1rem; font-family: 'Segoe UI', Arial, sans-serif; font-variant-emoji: text; color:${liked ? '#FF0000' : '#888'};">${likeIcon}</span> ${a.likesCount || 0}</small>
       </div>
     `;
   }).join('');
 }
 
-// ---- Топ-10 достижений ----
+// ============================================================
+// 18. ТОП-10 ДОСТИЖЕНИЙ
+// ============================================================
 async function showTopAchievements() {
   currentViewType = 'top';
   currentViewUid = null;
   hideMainContent();
   try {
-    const authorCache = {};
-    async function getAuthorName(userId) {
-      if (authorCache[userId]) return authorCache[userId];
-      try {
-        const userQuery = query(collection(db, 'users'), where('uid', '==', userId));
-        const userSnap = await getDocs(userQuery);
-        if (!userSnap.empty) {
-          const userData = userSnap.docs[0].data();
-          const name = userData.fullName || userData.firstName || 'Неизвестно';
-          const cls = userData.classLetter ? ` (${getClassDisplayWithQuotes(userData)})` : '';
-          authorCache[userId] = name + cls;
-          return authorCache[userId];
-        }
-      } catch (e) {
-        console.error('Ошибка получения автора:', e);
-      }
-      return 'Неизвестно';
-    }
-
     const q = query(
       collection(db, 'achievements'),
       where('isDeleted', '==', false)
@@ -882,7 +1277,7 @@ async function showTopAchievements() {
     const top10 = achievements.slice(0, 10);
 
     const topWithAuthors = await Promise.all(top10.map(async (a) => {
-      const author = await getAuthorName(a.userId);
+      const author = await fetchAuthorName(a.userId);
       const liked = userLikesSet.has(a.id);
       const likeIcon = liked ? '♥' : '♡';
       return { ...a, author, likeIcon, liked };
@@ -891,10 +1286,13 @@ async function showTopAchievements() {
     let html = '<h2>Топ-10 достижений</h2>';
     html += '<div id="topList">';
     topWithAuthors.forEach(a => {
-      html += `<div class="achievement-item" data-id="${a.id}" style="cursor:pointer; padding:10px; border-bottom:1px solid #eee;">
-        <h4>${a.title}</h4>
-        <p><strong>Категория:</strong> ${a.category || 'без категории'}</p>
-        <p><strong>Автор:</strong> ${a.author}</p>
+      const safeTitle = escapeHtml(a.title);
+      const safeCategory = escapeHtml(a.category || 'без категории');
+      const safeAuthor = escapeHtml(a.author);
+      html += `<div class="achievement-item" data-id="${escapeHtml(a.id)}" style="cursor:pointer; padding:10px; border-bottom:1px solid #eee;">
+        <h4>${safeTitle}</h4>
+        <p><strong>Категория:</strong> ${safeCategory}</p>
+        <p><strong>Автор:</strong> ${safeAuthor}</p>
         <small><span class="like-icon" style="font-size:1.1rem; font-family: 'Segoe UI', Arial, sans-serif; font-variant-emoji: text; color:${a.liked ? '#FF0000' : '#888'};">${a.likeIcon}</span> ${a.likesCount || 0}</small>
       </div>`;
     });
@@ -910,7 +1308,9 @@ async function showTopAchievements() {
   }
 }
 
-// ---- Статистика для учителя ----
+// ============================================================
+// 19. СТАТИСТИКА ДЛЯ УЧИТЕЛЯ
+// ============================================================
 async function showStatistics() {
   if (!currentUserDoc || currentUserDoc.role !== 'teacher') {
     pageContainer.innerHTML = '<p>Доступно только учителям.</p>';
@@ -943,19 +1343,18 @@ async function showStatistics() {
     const month = document.getElementById('statMonth').value;
     if (!month) { alert('Выберите месяц'); return; }
     const [year, monthNum] = month.split('-');
-    const start = new Date(year, monthNum-1, 1);
-    const end = new Date(year, monthNum, 0);
+    const start = new Date(year, monthNum - 1, 1);
+    const end = new Date(year, monthNum, 1);
 
     try {
-      const q = query(collection(db, 'achievements'), where('isDeleted', '==', false));
+      const q = query(
+        collection(db, 'achievements'),
+        where('isDeleted', '==', false),
+        where('createdAt', '>=', start),
+        where('createdAt', '<', end)
+      );
       const snap = await getDocs(q);
       let achievements = snap.docs.map(d => d.data());
-
-      achievements = achievements.filter(a => {
-        if (!a.createdAt) return false;
-        const date = a.createdAt.toDate ? a.createdAt.toDate() : new Date(a.createdAt.seconds * 1000);
-        return date >= start && date <= end;
-      });
 
       if (className) {
         const usersSnap = await getDocs(query(collection(db, 'users'), where('classDisplay', '==', className)));
@@ -983,7 +1382,9 @@ async function showStatistics() {
   });
 }
 
-// ---- Навигация ----
+// ============================================================
+// 20. НАВИГАЦИЯ
+// ============================================================
 showProfileLink.addEventListener('click', (e) => {
   e.preventDefault();
   if (currentUser) {
@@ -1006,7 +1407,9 @@ showStatisticsLink.addEventListener('click', (e) => {
   showStatistics();
 });
 
-// ---- Закрытие модалки ----
+// ============================================================
+// 21. ЗАКРЫТИЕ МОДАЛКИ
+// ============================================================
 modalClose.addEventListener('click', () => {
   closeModal();
 });
@@ -1017,7 +1420,9 @@ window.addEventListener('click', (e) => {
   }
 });
 
-// ---- Универсальный обработчик на pageContainer ----
+// ============================================================
+// 22. УНИВЕРСАЛЬНЫЙ ОБРАБОТЧИК НА pageContainer
+// ============================================================
 pageContainer.addEventListener('click', (e) => {
   const userCard = e.target.closest('.user-card');
   if (userCard) {
