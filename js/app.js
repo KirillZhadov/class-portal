@@ -183,6 +183,12 @@ function validateRussianLetter(letter) {
   return /^[А-ЯЁ]$/i.test(letter);
 }
 
+// === ПРОВЕРКИ РОЛЕЙ ===
+function hasRole(userDoc, roleName) {
+  if (!userDoc || !userDoc.roles) return false;
+  return Array.isArray(userDoc.roles) && userDoc.roles.includes(roleName);
+}
+
 const authorCache = {};
 async function fetchAuthorName(userId) {
   if (authorCache[userId]) return authorCache[userId];
@@ -203,7 +209,7 @@ async function fetchAuthorName(userId) {
 }
 
 // ============================================================
-// 3. ФУНКЦИИ ДЛЯ ИЕРАРХИЧЕСКИХ КАТЕГОРИЙ (КАСКАДНЫЕ СПИСКИ)
+// 3. ФУНКЦИИ ДЛЯ КАСКАДНЫХ СПИСКОВ
 // ============================================================
 function populateSelect(selectElement, options, defaultText = 'Выберите...') {
   selectElement.innerHTML = `<option value="">${defaultText}</option>`;
@@ -388,7 +394,7 @@ let currentViewUid = null;
 let userLikesSet = new Set();
 
 // ============================================================
-// 5. УПРАВЛЕНИЕ ВИДИМОСТЬЮ
+// 5. УПРАВЛЕНИЕ ВИДИМОСТЬЮ И ИНДИКАТОР ЗАГРУЗКИ
 // ============================================================
 function hideMainContent() {
   if (mainFeed) mainFeed.style.display = 'none';
@@ -402,6 +408,15 @@ function showMainContent() {
   pageContainer.innerHTML = '';
   currentViewType = null;
   currentViewUid = null;
+}
+
+function showLoadingState() {
+  pageContainer.innerHTML = `
+    <div style="display:flex; justify-content:center; align-items:center; min-height:300px; flex-direction:column;">
+      <div style="font-size:2rem; margin-bottom:15px;">⏳</div>
+      <p style="color:#888; font-size:1.2rem;">Загрузка...</p>
+    </div>
+  `;
 }
 
 function closeModal() {
@@ -497,7 +512,7 @@ registerBtn.addEventListener('click', async () => {
       classNumber: parseInt(classNumber),
       classLetter,
       classDisplay,
-      role: 'student',
+      roles: ['student'], // Массив ролей, по умолчанию — только ученик
       createdAt: serverTimestamp()
     };
     if (birthDate) {
@@ -535,8 +550,14 @@ onAuthStateChanged(auth, async (user) => {
     if (!snap.empty) {
       currentUserDoc = { id: snap.docs[0].id, ...snap.docs[0].data() };
     }
+    if (currentUserDoc && currentUserDoc.isDeleted) {
+      alert('Ваш аккаунт был удалён администратором.');
+      await signOut(auth);
+      return;
+    }
     await loadUserLikes();
-    if (currentUserDoc && currentUserDoc.role === 'teacher') {
+    // Статистика: доступна учителям и админам
+    if (hasRole(currentUserDoc, 'teacher') || hasRole(currentUserDoc, 'admin')) {
       showStatisticsLink.style.display = 'block';
     } else {
       showStatisticsLink.style.display = 'none';
@@ -642,7 +663,46 @@ async function updateUserProfile({ firstName, lastName, classNumber, classLetter
 }
 
 // ============================================================
-// 11. ЛЕНТА НОВЫХ ДОСТИЖЕНИЙ
+// 11. УДАЛЕНИЕ АККАУНТА (только для админа)
+// ============================================================
+async function deleteUserAccount(uid) {
+  if (!hasRole(currentUserDoc, 'admin')) {
+    alert('Недостаточно прав для удаления аккаунтов');
+    return;
+  }
+
+  if (!confirm('Вы уверены, что хотите удалить этот аккаунт? Все достижения, лайки и просмотры этого пользователя будут скрыты.')) {
+    return;
+  }
+
+  try {
+    const userQuery = query(collection(db, 'users'), where('uid', '==', uid));
+    const userSnap = await getDocs(userQuery);
+    if (!userSnap.empty) {
+      const userRef = doc(db, 'users', userSnap.docs[0].id);
+      await updateDoc(userRef, {
+        isDeleted: true,
+        deletedAt: serverTimestamp()
+      });
+    }
+
+    const achQuery = query(collection(db, 'achievements'), where('userId', '==', uid));
+    const achSnap = await getDocs(achQuery);
+    const updatePromises = achSnap.docs.map(d =>
+      updateDoc(doc(db, 'achievements', d.id), { isDeleted: true })
+    );
+    await Promise.all(updatePromises);
+
+    alert('Аккаунт удалён. Профиль и достижения скрыты.');
+    showStudents();
+  } catch (e) {
+    console.error('Ошибка удаления аккаунта:', e);
+    alert('Ошибка удаления: ' + e.message);
+  }
+}
+
+// ============================================================
+// 12. ЛЕНТА НОВЫХ ДОСТИЖЕНИЙ
 // ============================================================
 async function loadNewAchievement() {
   if (!currentUser) return;
@@ -706,7 +766,7 @@ async function loadNewAchievement() {
 }
 
 // ============================================================
-// 12. МОДАЛЬНОЕ ОКНО С НОВЫМИ ДОСТИЖЕНИЯМИ
+// 13. МОДАЛЬНОЕ ОКНО С НОВЫМИ ДОСТИЖЕНИЯМИ
 // ============================================================
 async function showNewAchievementsModal(achievements) {
   let currentIndex = 0;
@@ -779,7 +839,7 @@ async function showNewAchievementsModal(achievements) {
 }
 
 // ============================================================
-// 13. ОТМЕТКА ПРОСМОТРА
+// 14. ОТМЕТКА ПРОСМОТРА
 // ============================================================
 async function markAsViewed(achievementId) {
   if (!currentUser) return;
@@ -803,7 +863,7 @@ async function markAsViewed(achievementId) {
 }
 
 // ============================================================
-// 14. ПОЛНАЯ ИНФОРМАЦИЯ О ДОСТИЖЕНИИ
+// 15. ПОЛНАЯ ИНФОРМАЦИЯ О ДОСТИЖЕНИИ
 // ============================================================
 async function showFullAchievement(achievementId) {
   console.log('showFullAchievement вызвана с ID:', achievementId);
@@ -877,7 +937,7 @@ async function showFullAchievement(achievementId) {
 }
 
 // ============================================================
-// 15. ЛАЙКИ (Атомарное обновление)
+// 16. ЛАЙКИ (Атомарное обновление)
 // ============================================================
 async function toggleLike(achievementId) {
   if (!currentUser) return;
@@ -917,18 +977,22 @@ async function toggleLike(achievementId) {
 }
 
 // ============================================================
-// 16. СПИСОК УЧЕНИКОВ
+// 17. СПИСОК УЧЕНИКОВ (без удалённых)
 // ============================================================
 async function showStudents() {
   currentViewType = 'students';
   currentViewUid = null;
   hideMainContent();
+  showLoadingState();
   try {
     const q = query(collection(db, 'users'), where('role', '==', 'student'));
     const snap = await getDocs(q);
     let html = '<h2>Список учеников</h2>';
     snap.forEach(doc => {
       const u = doc.data();
+      if (u.isDeleted) return;
+      // Показываем только тех, у кого есть роль student
+      if (!hasRole(u, 'student')) return;
       const displayName = u.fullName || u.firstName || 'Без имени';
       const classDisplay = u.classLetter ? getClassDisplayWithQuotes(u) : (u.classDisplay || '?');
       html += `<div class="user-card" data-uid="${escapeHtml(u.uid)}">${escapeHtml(displayName)} (${escapeHtml(classDisplay)})</div>`;
@@ -945,12 +1009,13 @@ async function showStudents() {
 }
 
 // ============================================================
-// 17. ПРОФИЛЬ УЧЕНИКА
+// 18. ПРОФИЛЬ УЧЕНИКА
 // ============================================================
 async function showUserProfile(uid) {
   currentViewType = 'profile';
   currentViewUid = uid;
   hideMainContent();
+  showLoadingState();
   try {
     const q = query(collection(db, 'users'), where('uid', '==', uid));
     const snap = await getDocs(q);
@@ -976,8 +1041,9 @@ async function showUserProfile(uid) {
     }
 
     const isOwnProfile = (currentUser && uid === currentUser.uid);
+    const isAdmin = hasRole(currentUserDoc, 'admin');
 
-    // Кнопка и форма редактирования профиля (только свой)
+    // ---- Редактирование профиля ----
     let editButtonHtml = '';
     let editFormHtml = '';
     if (isOwnProfile) {
@@ -1005,7 +1071,13 @@ async function showUserProfile(uid) {
       `;
     }
 
-    // Кнопка добавления достижения + каскадные категории (только в своём профиле)
+    // ---- Кнопка удаления аккаунта (только для админа) ----
+    let adminDeleteButtonHtml = '';
+    if (isAdmin && !isOwnProfile) {
+      adminDeleteButtonHtml = `<button id="adminDeleteUserBtn" style="margin-bottom:15px; background:#c00; color:white; border:none; padding:10px 20px; border-radius:8px; cursor:pointer; font-size:1rem; font-weight:bold;">🗑️ Удалить аккаунт</button>`;
+    }
+
+    // ---- Кнопка добавления достижения ----
     let addButtonHtml = '';
     let addFormHtml = '';
     if (isOwnProfile) {
@@ -1015,7 +1087,6 @@ async function showUserProfile(uid) {
           <h4>Новое достижение</h4>
           <input type="text" id="achTitle" placeholder="Название" style="width:100%; padding:8px; margin:5px 0; border:1px solid #ccc; border-radius:6px;" />
           
-          <!-- КАСКАДНЫЕ СПИСКИ КАТЕГОРИЙ -->
           <div id="categoryContainer" style="margin:5px 0;">
             <select id="catLevel1" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:6px;">
               <option value="">Выберите направление</option>
@@ -1063,6 +1134,7 @@ async function showUserProfile(uid) {
       ${user.avatarUrl ? `<img src="${escapeHtml(user.avatarUrl)}" style="max-width:150px;border-radius:50%;"/>` : ''}
       <p>Класс: ${escapeHtml(classDisplay)}</p>
       <p>Возраст: ${escapeHtml(ageText)}</p>
+      ${adminDeleteButtonHtml}
       ${editButtonHtml}
       ${editFormHtml}
       <hr/>
@@ -1092,9 +1164,12 @@ async function showUserProfile(uid) {
     `;
     pageContainer.innerHTML = html;
 
-    // --- Обработчики для кнопок в профиле ---
+    // ---- Обработчики ----
+    document.getElementById('adminDeleteUserBtn')?.addEventListener('click', async () => {
+      await deleteUserAccount(uid);
+    });
+
     if (isOwnProfile) {
-      // Редактирование профиля
       const editBtn = document.getElementById('editProfileBtn');
       const editForm = document.getElementById('editProfileForm');
       const saveBtn = document.getElementById('saveProfileBtn');
@@ -1151,7 +1226,6 @@ async function showUserProfile(uid) {
         });
       }
 
-      // Добавление достижения
       const showAddBtn = document.getElementById('showAddAchievementBtn');
       const addFormEl = document.getElementById('addAchievementForm');
       const submitBtn = document.getElementById('submitAchievementBtn');
@@ -1163,7 +1237,6 @@ async function showUserProfile(uid) {
             addFormEl.style.display = 'none';
           } else {
             addFormEl.style.display = 'block';
-            // Инициализируем каскадные списки при открытии формы
             initCategorySelectors();
           }
         });
@@ -1185,7 +1258,6 @@ async function showUserProfile(uid) {
             addFormEl.style.display = 'none';
             document.getElementById('achTitle').value = '';
             document.getElementById('achDescription').value = '';
-            // Сброс категорий
             document.getElementById('catLevel1').value = '';
             document.getElementById('catLevel2').innerHTML = '<option value="">Выберите категорию</option>';
             document.getElementById('catLevel3').innerHTML = '<option value="">Выберите детали</option>';
@@ -1220,7 +1292,6 @@ async function showUserProfile(uid) {
       }
     }
 
-    // Обработчики сортировки
     document.getElementById('sortDateBtn')?.addEventListener('click', () => {
       achievements.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       renderAchievementsList(achievements);
@@ -1260,12 +1331,13 @@ function renderAchievementsList(achievements) {
 }
 
 // ============================================================
-// 18. ТОП-10 ДОСТИЖЕНИЙ
+// 19. ТОП-10 ДОСТИЖЕНИЙ
 // ============================================================
 async function showTopAchievements() {
   currentViewType = 'top';
   currentViewUid = null;
   hideMainContent();
+  showLoadingState();
   try {
     const q = query(
       collection(db, 'achievements'),
@@ -1309,16 +1381,17 @@ async function showTopAchievements() {
 }
 
 // ============================================================
-// 19. СТАТИСТИКА ДЛЯ УЧИТЕЛЯ
+// 20. СТАТИСТИКА ДЛЯ УЧИТЕЛЯ И АДМИНА
 // ============================================================
 async function showStatistics() {
-  if (!currentUserDoc || currentUserDoc.role !== 'teacher') {
+  if (!currentUserDoc || (!hasRole(currentUserDoc, 'teacher') && !hasRole(currentUserDoc, 'admin'))) {
     pageContainer.innerHTML = '<p>Доступно только учителям.</p>';
     return;
   }
   currentViewType = 'statistics';
   currentViewUid = null;
   hideMainContent();
+  showLoadingState();
 
   pageContainer.innerHTML = `
     <h2>Статистика</h2>
@@ -1383,7 +1456,7 @@ async function showStatistics() {
 }
 
 // ============================================================
-// 20. НАВИГАЦИЯ
+// 21. НАВИГАЦИЯ
 // ============================================================
 showProfileLink.addEventListener('click', (e) => {
   e.preventDefault();
@@ -1408,7 +1481,7 @@ showStatisticsLink.addEventListener('click', (e) => {
 });
 
 // ============================================================
-// 21. ЗАКРЫТИЕ МОДАЛКИ
+// 22. ЗАКРЫТИЕ МОДАЛКИ
 // ============================================================
 modalClose.addEventListener('click', () => {
   closeModal();
@@ -1421,7 +1494,7 @@ window.addEventListener('click', (e) => {
 });
 
 // ============================================================
-// 22. УНИВЕРСАЛЬНЫЙ ОБРАБОТЧИК НА pageContainer
+// 23. УНИВЕРСАЛЬНЫЙ ОБРАБОТЧИК НА pageContainer
 // ============================================================
 pageContainer.addEventListener('click', (e) => {
   const userCard = e.target.closest('.user-card');
@@ -1441,4 +1514,4 @@ pageContainer.addEventListener('click', (e) => {
   }
 });
 
-console.log('Портал "Достижения 7В" запущен');
+console.log('Портал "Достижения 7В" запущен (с массивом ролей)');
