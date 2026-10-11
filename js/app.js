@@ -556,7 +556,6 @@ onAuthStateChanged(auth, async (user) => {
       return;
     }
     await loadUserLikes();
-    // Статистика: доступна учителям и админам
     if (hasRole(currentUserDoc, 'teacher') || hasRole(currentUserDoc, 'admin')) {
       showStatisticsLink.style.display = 'block';
     } else {
@@ -977,7 +976,7 @@ async function toggleLike(achievementId) {
 }
 
 // ============================================================
-// 17. СПИСОК УЧЕНИКОВ (без удалённых)
+// 17. СПИСОК УЧЕНИКОВ (ИСПРАВЛЕНО: фильтр по массиву roles)
 // ============================================================
 async function showStudents() {
   currentViewType = 'students';
@@ -985,18 +984,21 @@ async function showStudents() {
   hideMainContent();
   showLoadingState();
   try {
-    const q = query(collection(db, 'users'), where('role', '==', 'student'));
-    const snap = await getDocs(q);
+    const snap = await getDocs(collection(db, 'users'));
     let html = '<h2>Список учеников</h2>';
+    let count = 0;
     snap.forEach(doc => {
       const u = doc.data();
       if (u.isDeleted) return;
-      // Показываем только тех, у кого есть роль student
-      if (!hasRole(u, 'student')) return;
+      if (!hasRole(u, 'student')) return; // Показываем только тех, у кого есть роль student
+      count++;
       const displayName = u.fullName || u.firstName || 'Без имени';
       const classDisplay = u.classLetter ? getClassDisplayWithQuotes(u) : (u.classDisplay || '?');
       html += `<div class="user-card" data-uid="${escapeHtml(u.uid)}">${escapeHtml(displayName)} (${escapeHtml(classDisplay)})</div>`;
     });
+    if (count === 0) {
+      html += '<p>Пока нет зарегистрированных учеников.</p>';
+    }
     html += `<div style="margin-top:30px;"><button id="backToMainBtn" class="btn-primary">На главную</button></div>`;
     pageContainer.innerHTML = html;
     document.getElementById('backToMainBtn')?.addEventListener('click', () => {
@@ -1004,6 +1006,7 @@ async function showStudents() {
       loadNewAchievement();
     });
   } catch (e) {
+    console.error(e);
     pageContainer.innerHTML = 'Ошибка загрузки';
   }
 }
@@ -1071,7 +1074,7 @@ async function showUserProfile(uid) {
       `;
     }
 
-    // ---- Кнопка удаления аккаунта (только для админа) ----
+    // ---- Кнопка удаления аккаунта (только для админа, не для себя) ----
     let adminDeleteButtonHtml = '';
     if (isAdmin && !isOwnProfile) {
       adminDeleteButtonHtml = `<button id="adminDeleteUserBtn" style="margin-bottom:15px; background:#c00; color:white; border:none; padding:10px 20px; border-radius:8px; cursor:pointer; font-size:1rem; font-weight:bold;">🗑️ Удалить аккаунт</button>`;
