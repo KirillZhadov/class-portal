@@ -512,7 +512,7 @@ registerBtn.addEventListener('click', async () => {
       classNumber: parseInt(classNumber),
       classLetter,
       classDisplay,
-      roles: ['student'], // Массив ролей, по умолчанию — только ученик
+      roles: ['student'],
       createdAt: serverTimestamp()
     };
     if (birthDate) {
@@ -862,7 +862,7 @@ async function markAsViewed(achievementId) {
 }
 
 // ============================================================
-// 15. ПОЛНАЯ ИНФОРМАЦИЯ О ДОСТИЖЕНИИ
+// 15. ПОЛНАЯ ИНФОРМАЦИЯ О ДОСТИЖЕНИИ (с редактированием для админа)
 // ============================================================
 async function showFullAchievement(achievementId) {
   console.log('showFullAchievement вызвана с ID:', achievementId);
@@ -876,6 +876,7 @@ async function showFullAchievement(achievementId) {
     const a = docSnap.data();
     const authorName = await fetchAuthorName(a.userId);
     const isAuthor = currentUser && a.userId === currentUser.uid;
+    const isAdmin = hasRole(currentUserDoc, 'admin');
     const liked = userLikesSet.has(achievementId);
     const likeIcon = liked ? '♥' : '♡';
 
@@ -887,6 +888,10 @@ async function showFullAchievement(achievementId) {
     const safeDate = a.createdAt ? new Date(a.createdAt.seconds * 1000).toLocaleString() : '';
     const safeDesc = escapeHtml(a.description || '');
 
+    // Кнопки редактирования и удаления доступны автору ИЛИ админу
+    const canEdit = isAuthor || isAdmin;
+    const canDelete = isAuthor || isAdmin;
+
     modalBody.innerHTML = `
       <div style="text-align:left;">
         <h2>${safeTitle}</h2>
@@ -896,8 +901,10 @@ async function showFullAchievement(achievementId) {
         <p><strong>Описание:</strong> ${safeDesc}</p>
         <div style="margin-top:15px;">
           <button id="likeFullBtn" class="like-btn" style="background:none; border:none; font-size:1.2rem; font-family: 'Segoe UI', Arial, sans-serif; font-variant-emoji: text; cursor:pointer; color:${liked ? '#FF0000' : '#888'};">${likeIcon} ${a.likesCount || 0}</button>
-          ${isAuthor ? `<button id="deleteFullBtn" style="margin-left:10px;background:red;color:white;border:none;padding:5px 15px;border-radius:6px;cursor:pointer;">Удалить</button>` : ''}
+          ${canEdit ? `<button id="editFullBtn" style="margin-left:10px;background:#800020;color:white;border:none;padding:5px 15px;border-radius:6px;cursor:pointer;">Редактировать</button>` : ''}
+          ${canDelete ? `<button id="deleteFullBtn" style="margin-left:10px;background:red;color:white;border:none;padding:5px 15px;border-radius:6px;cursor:pointer;">Удалить</button>` : ''}
         </div>
+        <div id="editFormContainer"></div>
         <div style="margin-top:15px;">
           <button id="closeFullBtn">Закрыть</button>
         </div>
@@ -910,6 +917,46 @@ async function showFullAchievement(achievementId) {
       showFullAchievement(achievementId);
     });
 
+    // Редактирование
+    document.getElementById('editFullBtn')?.addEventListener('click', () => {
+      const container = document.getElementById('editFormContainer');
+      container.innerHTML = `
+        <div style="margin-top:15px; padding:15px; background:#f5f5f5; border-radius:8px;">
+          <h4>Редактировать достижение</h4>
+          <input type="text" id="editAchTitle" value="${escapeHtml(a.title)}" style="width:100%; padding:8px; margin:5px 0; border:1px solid #ccc; border-radius:6px;" />
+          <input type="text" id="editAchCategory" value="${escapeHtml(a.category)}" style="width:100%; padding:8px; margin:5px 0; border:1px solid #ccc; border-radius:6px;" />
+          <textarea id="editAchDesc" rows="4" style="width:100%; padding:8px; margin:5px 0; border:1px solid #ccc; border-radius:6px;">${escapeHtml(a.description || '')}</textarea>
+          <button id="saveEditBtn" style="background:#800020;color:white;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;">Сохранить</button>
+          <button id="cancelEditAchBtn" style="background:#ccc;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;margin-left:5px;">Отмена</button>
+        </div>
+      `;
+      document.getElementById('saveEditBtn').addEventListener('click', async () => {
+        const newTitle = document.getElementById('editAchTitle').value.trim();
+        const newCategory = document.getElementById('editAchCategory').value.trim();
+        const newDesc = document.getElementById('editAchDesc').value.trim();
+        if (!newTitle || !newCategory) {
+          alert('Заполните название и категорию');
+          return;
+        }
+        try {
+          await updateDoc(doc(db, 'achievements', achievementId), {
+            title: newTitle,
+            category: newCategory,
+            description: newDesc,
+            updatedAt: serverTimestamp()
+          });
+          alert('Достижение обновлено');
+          showFullAchievement(achievementId);
+        } catch (e) {
+          alert('Ошибка редактирования: ' + e.message);
+        }
+      });
+      document.getElementById('cancelEditAchBtn').addEventListener('click', () => {
+        container.innerHTML = '';
+      });
+    });
+
+    // Удаление
     document.getElementById('deleteFullBtn')?.addEventListener('click', async () => {
       if (confirm('Вы уверены, что хотите удалить это достижение?')) {
         try {
@@ -976,7 +1023,7 @@ async function toggleLike(achievementId) {
 }
 
 // ============================================================
-// 17. СПИСОК УЧЕНИКОВ (ИСПРАВЛЕНО: фильтр по массиву roles)
+// 17. СПИСОК УЧЕНИКОВ
 // ============================================================
 async function showStudents() {
   currentViewType = 'students';
@@ -990,7 +1037,7 @@ async function showStudents() {
     snap.forEach(doc => {
       const u = doc.data();
       if (u.isDeleted) return;
-      if (!hasRole(u, 'student')) return; // Показываем только тех, у кого есть роль student
+      if (!hasRole(u, 'student')) return;
       count++;
       const displayName = u.fullName || u.firstName || 'Без имени';
       const classDisplay = u.classLetter ? getClassDisplayWithQuotes(u) : (u.classDisplay || '?');
@@ -1517,4 +1564,4 @@ pageContainer.addEventListener('click', (e) => {
   }
 });
 
-console.log('Портал "Достижения 7В" запущен (с массивом ролей)');
+console.log('Портал "Достижения 7В" запущен (админ может редактировать и удалять чужие достижения)');
