@@ -365,6 +365,94 @@ function initCategorySelectors() {
 }
 
 // ============================================================
+// 3.1. ПАРСИНГ И ПРЕДЗАПОЛНЕНИЕ КАТЕГОРИЙ (для редактирования)
+// ============================================================
+function parseCategoryPath(categoryStr) {
+  // Разбивает "спорт/соревнования/футбол/золото" на части
+  if (!categoryStr) return [];
+  return categoryStr.split('/').map(s => s.trim()).filter(Boolean);
+}
+
+function prefillCategorySelectors(categoryStr) {
+  // Инициализируем списки заново
+  initCategorySelectors();
+
+  const parts = parseCategoryPath(categoryStr);
+  if (parts.length === 0) return;
+
+  const level1 = document.getElementById('catLevel1');
+  const level2 = document.getElementById('catLevel2');
+  const level3 = document.getElementById('catLevel3');
+  const textInput = document.getElementById('catTextInput');
+  const placeSelect = document.getElementById('catLevelPlace');
+
+  // Уровень 1
+  if (parts[0]) {
+    level1.value = parts[0];
+    handleLevel1Change();
+  }
+
+  // Уровень 2
+  if (parts[1]) {
+    level2.value = parts[1];
+    handleLevel2Change();
+  }
+
+  // Уровень 3 — это может быть текстовое поле (предмет, вид спорта) или селект (если есть)
+  let placeValue = null;
+  let currentPath = parts.slice(0, 2);
+
+  // Определяем, что идёт после второго уровня в конфиге
+  const l1Key = parts[0];
+  const l2Key = parts[1];
+  const l2Config = CATEGORIES_CONFIG[l1Key]?.sub?.[l2Key];
+
+  if (l2Config && l2Config.sub) {
+    const l2SubKeys = Object.keys(l2Config.sub);
+    // Если первая подкатегория — "вид спорта" или "предмет" (inputType: 'text')
+    const firstKey = l2SubKeys[0];
+    const firstConfig = l2Config.sub[firstKey];
+
+    if (firstConfig && firstConfig.inputType === 'text') {
+      // parts[2] — это значение текстового поля
+      if (parts[2]) {
+        // Скрываем селект (если был)
+        level3.style.display = 'none';
+        // Показываем текстовое поле
+        const textInputContainer = document.getElementById('catTextInputContainer');
+        textInput.placeholder = firstConfig.placeholder || '';
+        textInput.value = parts[2];
+        textInputContainer.style.display = 'block';
+        // Следующий элемент — место
+        if (parts[3]) placeValue = parts[3];
+      }
+    } else {
+      // Иначе parts[2] — это значение селекта level3
+      if (parts[2]) {
+        level3.value = parts[2];
+        handleLevel3Change();
+      }
+      // parts[3] — место
+      if (parts[3]) placeValue = parts[3];
+    }
+  } else if (l2Config && l2Config.inputType === 'text') {
+    // Случай: level2 — это текстовое поле (например, "личные достижения/вид спорта/футбол")
+    // Тогда parts[1] уже установлен как значение селекта, а parts[2] — это текст
+    const textInputContainer = document.getElementById('catTextInputContainer');
+    textInput.placeholder = l2Config.placeholder || '';
+    textInput.value = parts[2] || '';
+    textInputContainer.style.display = 'block';
+    if (parts[3]) placeValue = parts[3];
+  }
+
+  // Устанавливаем место
+  if (placeValue) {
+    placeSelect.value = placeValue;
+    placeSelect.style.display = 'block';
+  }
+}
+
+// ============================================================
 // 4. DOM-ЭЛЕМЕНТЫ И СОСТОЯНИЯ
 // ============================================================
 const authContainer = document.getElementById('authContainer');
@@ -862,7 +950,7 @@ async function markAsViewed(achievementId) {
 }
 
 // ============================================================
-// 15. ПОЛНАЯ ИНФОРМАЦИЯ О ДОСТИЖЕНИИ (с редактированием для админа)
+// 15. ПОЛНАЯ ИНФОРМАЦИЯ О ДОСТИЖЕНИИ (с редактированием через каскадные списки)
 // ============================================================
 async function showFullAchievement(achievementId) {
   console.log('showFullAchievement вызвана с ID:', achievementId);
@@ -888,7 +976,6 @@ async function showFullAchievement(achievementId) {
     const safeDate = a.createdAt ? new Date(a.createdAt.seconds * 1000).toLocaleString() : '';
     const safeDesc = escapeHtml(a.description || '');
 
-    // Кнопки редактирования и удаления доступны автору ИЛИ админу
     const canEdit = isAuthor || isAdmin;
     const canDelete = isAuthor || isAdmin;
 
@@ -917,22 +1004,53 @@ async function showFullAchievement(achievementId) {
       showFullAchievement(achievementId);
     });
 
-    // Редактирование
+    // ---- Редактирование через каскадные списки ----
     document.getElementById('editFullBtn')?.addEventListener('click', () => {
       const container = document.getElementById('editFormContainer');
       container.innerHTML = `
         <div style="margin-top:15px; padding:15px; background:#f5f5f5; border-radius:8px;">
           <h4>Редактировать достижение</h4>
           <input type="text" id="editAchTitle" value="${escapeHtml(a.title)}" style="width:100%; padding:8px; margin:5px 0; border:1px solid #ccc; border-radius:6px;" />
-          <input type="text" id="editAchCategory" value="${escapeHtml(a.category)}" style="width:100%; padding:8px; margin:5px 0; border:1px solid #ccc; border-radius:6px;" />
+          
+          <div id="editCategoryContainer" style="margin:5px 0;">
+            <select id="catLevel1" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:6px;">
+              <option value="">Выберите направление</option>
+            </select>
+            <select id="catLevel2" style="display:none; width:100%; padding:8px; margin-top:5px; border:1px solid #ccc; border-radius:6px;">
+              <option value="">Выберите категорию</option>
+            </select>
+            <select id="catLevel3" style="display:none; width:100%; padding:8px; margin-top:5px; border:1px solid #ccc; border-radius:6px;">
+              <option value="">Выберите детали</option>
+            </select>
+            <div id="catTextInputContainer" style="display:none; margin-top:5px;">
+              <input type="text" id="catTextInput" placeholder="" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:6px;" />
+            </div>
+            <select id="catLevelPlace" style="display:none; width:100%; padding:8px; margin-top:5px; border:1px solid #ccc; border-radius:6px;">
+              <option value="">Выберите результат</option>
+              <option value="золото">🥇 Золото</option>
+              <option value="серебро">🥈 Серебро</option>
+              <option value="бронза">🥉 Бронза</option>
+              <option value="1 место">🥇 1 место</option>
+              <option value="2 место">🥈 2 место</option>
+              <option value="3 место">🥉 3 место</option>
+              <option value="участник">Участник</option>
+            </select>
+          </div>
+          
           <textarea id="editAchDesc" rows="4" style="width:100%; padding:8px; margin:5px 0; border:1px solid #ccc; border-radius:6px;">${escapeHtml(a.description || '')}</textarea>
           <button id="saveEditBtn" style="background:#800020;color:white;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;">Сохранить</button>
           <button id="cancelEditAchBtn" style="background:#ccc;border:none;padding:6px 16px;border-radius:6px;cursor:pointer;margin-left:5px;">Отмена</button>
         </div>
       `;
+
+      // Предзаполняем каскадные списки текущей категорией
+      setTimeout(() => {
+        prefillCategorySelectors(a.category);
+      }, 0);
+
       document.getElementById('saveEditBtn').addEventListener('click', async () => {
         const newTitle = document.getElementById('editAchTitle').value.trim();
-        const newCategory = document.getElementById('editAchCategory').value.trim();
+        const newCategory = getFullCategoryPath();
         const newDesc = document.getElementById('editAchDesc').value.trim();
         if (!newTitle || !newCategory) {
           alert('Заполните название и категорию');
@@ -956,7 +1074,7 @@ async function showFullAchievement(achievementId) {
       });
     });
 
-    // Удаление
+    // ---- Удаление ----
     document.getElementById('deleteFullBtn')?.addEventListener('click', async () => {
       if (confirm('Вы уверены, что хотите удалить это достижение?')) {
         try {
@@ -1564,4 +1682,4 @@ pageContainer.addEventListener('click', (e) => {
   }
 });
 
-console.log('Портал "Достижения 7В" запущен (админ может редактировать и удалять чужие достижения)');
+console.log('Портал "Достижения 7В" запущен (с редактированием через каскадные списки)');
