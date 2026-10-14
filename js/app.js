@@ -368,7 +368,6 @@ function initCategorySelectors() {
 // 3.1. ПАРСИНГ И ПРЕДЗАПОЛНЕНИЕ КАТЕГОРИЙ (для редактирования)
 // ============================================================
 function parseCategoryPath(categoryStr) {
-  // Разбивает "спорт/соревнования/футбол/золото" на части
   if (!categoryStr) return [];
   return categoryStr.split('/').map(s => s.trim()).filter(Boolean);
 }
@@ -386,58 +385,65 @@ function prefillCategorySelectors(categoryStr) {
   const textInput = document.getElementById('catTextInput');
   const placeSelect = document.getElementById('catLevelPlace');
 
-  // Уровень 1
-  if (parts[0]) {
-    level1.value = parts[0];
-    handleLevel1Change();
+  // Проверяем, что первая часть (направление) есть в новой конфигурации
+  const firstPart = parts[0];
+  if (!CATEGORIES_CONFIG[firstPart]) {
+    // Это старая категория — она не соответствует новой структуре.
+    console.warn('Категория "' + categoryStr + '" не соответствует новой структуре. Выберите категорию заново.');
+    const container = document.getElementById('editCategoryContainer') || document.getElementById('categoryContainer');
+    if (container) {
+      const notice = document.createElement('p');
+      notice.style.cssText = 'color:#800020; font-size:0.9rem; margin:5px 0;';
+      notice.textContent = 'Старая категория не поддерживается новой структурой. Выберите новую.';
+      container.insertBefore(notice, container.firstChild);
+    }
+    return;
   }
+
+  // Уровень 1
+  level1.value = parts[0];
+  handleLevel1Change();
 
   // Уровень 2
   if (parts[1]) {
-    level2.value = parts[1];
-    handleLevel2Change();
+    const l1Config = CATEGORIES_CONFIG[parts[0]];
+    if (l1Config && l1Config.sub && l1Config.sub[parts[1]]) {
+      level2.value = parts[1];
+      handleLevel2Change();
+    } else {
+      return;
+    }
   }
 
-  // Уровень 3 — это может быть текстовое поле (предмет, вид спорта) или селект (если есть)
-  let placeValue = null;
-  let currentPath = parts.slice(0, 2);
-
-  // Определяем, что идёт после второго уровня в конфиге
+  // Уровень 3 и далее
   const l1Key = parts[0];
   const l2Key = parts[1];
   const l2Config = CATEGORIES_CONFIG[l1Key]?.sub?.[l2Key];
 
+  let placeValue = null;
+
   if (l2Config && l2Config.sub) {
     const l2SubKeys = Object.keys(l2Config.sub);
-    // Если первая подкатегория — "вид спорта" или "предмет" (inputType: 'text')
     const firstKey = l2SubKeys[0];
     const firstConfig = l2Config.sub[firstKey];
 
     if (firstConfig && firstConfig.inputType === 'text') {
-      // parts[2] — это значение текстового поля
       if (parts[2]) {
-        // Скрываем селект (если был)
         level3.style.display = 'none';
-        // Показываем текстовое поле
         const textInputContainer = document.getElementById('catTextInputContainer');
         textInput.placeholder = firstConfig.placeholder || '';
         textInput.value = parts[2];
         textInputContainer.style.display = 'block';
-        // Следующий элемент — место
         if (parts[3]) placeValue = parts[3];
       }
     } else {
-      // Иначе parts[2] — это значение селекта level3
-      if (parts[2]) {
+      if (parts[2] && l2Config.sub[parts[2]]) {
         level3.value = parts[2];
         handleLevel3Change();
       }
-      // parts[3] — место
       if (parts[3]) placeValue = parts[3];
     }
   } else if (l2Config && l2Config.inputType === 'text') {
-    // Случай: level2 — это текстовое поле (например, "личные достижения/вид спорта/футбол")
-    // Тогда parts[1] уже установлен как значение селекта, а parts[2] — это текст
     const textInputContainer = document.getElementById('catTextInputContainer');
     textInput.placeholder = l2Config.placeholder || '';
     textInput.value = parts[2] || '';
@@ -445,7 +451,6 @@ function prefillCategorySelectors(categoryStr) {
     if (parts[3]) placeValue = parts[3];
   }
 
-  // Устанавливаем место
   if (placeValue) {
     placeSelect.value = placeValue;
     placeSelect.style.display = 'block';
@@ -1682,4 +1687,4 @@ pageContainer.addEventListener('click', (e) => {
   }
 });
 
-console.log('Портал "Достижения 7В" запущен (с редактированием через каскадные списки)');
+console.log('Портал "Достижения 7В" запущен (с обработкой старых категорий)');
