@@ -1048,7 +1048,11 @@ async function showFullAchievement(achievementId) {
         </div>
       `;
 
+      // Инициализируем каскадные списки сразу
+      initCategorySelectors();
+
       // Предзаполняем каскадные списки текущей категорией
+      prefillCategorySelectors(a.category);// Предзаполняем каскадные списки текущей категорией
       setTimeout(() => {
         prefillCategorySelectors(a.category);
       }, 0);
